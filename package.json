@@ -1,0 +1,25 @@
+{
+  "name": "codex-context-sentinel",
+  "version": "0.1.0",
+  "description": "A lightweight local Codex session health scanner that recommends when to start a fresh conversation.",
+  "type": "module",
+  "bin": {
+    "context-sentinel": "./src/index.js"
+  },
+  "scripts": {
+    "test": "node --test",
+    "check": "node --test",
+    "scan": "node src/index.js scan"
+  },
+  "keywords": [
+    "codex",
+    "context",
+    "cli",
+    "session",
+    "handoff"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  }
+}
