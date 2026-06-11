@@ -3,11 +3,20 @@ import assert from "node:assert/strict";
 
 import {
   analyzeSessions,
+  buildHandoffFilePath,
+  buildHandoffMarkdown,
   buildHookBlockReason,
   buildHandoffPrompt,
+  notificationStateKey,
+  readLatestMatchingSession,
+  recordNotification,
   recommendationFromScore,
   scoreContextPressure,
+  shouldNotify,
 } from "../src/sentinel.js";
+import { mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 describe("context pressure scoring", () => {
   it("recommends continuing for small sessions", () => {
@@ -83,5 +92,122 @@ describe("session analysis", () => {
     assert.match(reason, /上下文已经过长/);
     assert.match(reason, /Start a clean thread/);
     assert.match(reason, /sentinel-continue/);
+  });
+});
+
+describe("latest session matching", () => {
+  it("returns only the most recently modified matching project session", () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), "sentinel-sessions-"));
+    const oldFile = join(sessionsDir, "old.jsonl");
+    const newFile = join(sessionsDir, "new.jsonl");
+
+    writeFileSync(oldFile, "work in G:/docs/demo");
+    writeFileSync(newFile, "continue work in G:/docs/demo");
+
+    const oldTime = new Date("2026-06-11T10:00:00.000Z");
+    const newTime = new Date("2026-06-11T11:00:00.000Z");
+    utimesSync(oldFile, oldTime, oldTime);
+    utimesSync(newFile, newTime, newTime);
+
+    const sessions = readLatestMatchingSession({
+      sessionsDir,
+      projectPath: "G:/docs/demo",
+      limit: 20,
+    });
+
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0].file, newFile);
+  });
+});
+
+describe("handoff files", () => {
+  it("builds a timestamped project handoff path", () => {
+    const filePath = buildHandoffFilePath({
+      handoffsDir: "C:/Users/ASUS/.codex/context-sentinel/handoffs",
+      projectPath: "G:/docs/House App",
+      now: new Date(2026, 5, 11, 10, 20, 30),
+    });
+
+    assert.equal(
+      filePath.replaceAll("\\", "/"),
+      "C:/Users/ASUS/.codex/context-sentinel/handoffs/20260611-102030-house-app.md",
+    );
+  });
+
+  it("writes a concise heuristic handoff markdown body", () => {
+    const markdown = buildHandoffMarkdown({
+      generatedAt: new Date("2026-06-11T10:20:30.000Z"),
+      analysis: {
+        projectPath: "G:/docs/demo",
+        recommendation: "start-new-thread",
+        score: 90,
+        estimatedTokens: 120000,
+        sessionCount: 4,
+        toolActivities: 300,
+        handoffPrompt: "Start a clean thread.",
+      },
+    });
+
+    assert.match(markdown, /Codex Context Sentinel Handoff/);
+    assert.match(markdown, /Start a clean thread/);
+    assert.match(markdown, /not exact token accounting/);
+  });
+});
+
+describe("notification cooldown", () => {
+  it("does not notify for continue-current-thread", () => {
+    assert.equal(
+      shouldNotify({
+        state: {},
+        projectPath: "G:/docs/demo",
+        recommendation: "continue-current-thread",
+      }),
+      false,
+    );
+  });
+
+  it("suppresses the same project and recommendation during cooldown", () => {
+    const now = new Date("2026-06-11T10:00:00.000Z");
+    const state = recordNotification({
+      state: {},
+      projectPath: "G:/docs/demo",
+      recommendation: "start-new-thread",
+      handoffPath: "handoff.md",
+      now,
+    });
+
+    assert.equal(
+      shouldNotify({
+        state,
+        projectPath: "G:/docs/demo",
+        recommendation: "start-new-thread",
+        nowMs: now.getTime() + 29 * 60 * 1000,
+        cooldownMs: 30 * 60 * 1000,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldNotify({
+        state,
+        projectPath: "G:/docs/demo",
+        recommendation: "start-new-thread",
+        nowMs: now.getTime() + 31 * 60 * 1000,
+        cooldownMs: 30 * 60 * 1000,
+      }),
+      true,
+    );
+  });
+
+  it("uses a stable normalized notification key", () => {
+    assert.equal(
+      notificationStateKey({
+        projectPath: "G:\\docs\\demo",
+        recommendation: "consider-new-thread",
+      }),
+      notificationStateKey({
+        projectPath: "G:/docs/demo",
+        recommendation: "consider-new-thread",
+      }),
+    );
   });
 });
