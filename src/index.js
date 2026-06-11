@@ -141,7 +141,7 @@ Usage:
   context-sentinel watch --project <path> [--interval <seconds>]
   context-sentinel status [--state <path>]
   context-sentinel stop [--state <path>]
-  context-sentinel install-windows-task --project <path> [--interval <seconds>]
+  context-sentinel install-windows-task --project <path> [--interval <seconds>] [--cooldown-minutes <minutes>]
   context-sentinel hook [--warn-score <n>] [--block-score <n>]
   context-sentinel install-hook [--warn-score <n>] [--block-score <n>]
 
@@ -354,6 +354,8 @@ async function runInstallWindowsTask(args) {
     quoteForPowerShell(resolve(args.sessions)),
     "--interval",
     String(normalizePositiveNumber(args.interval, 300)),
+    "--cooldown-minutes",
+    String(normalizePositiveNumber(args.cooldownMinutes, 30)),
     "--state",
     quoteForPowerShell(resolve(args.state)),
     "--handoffs",
