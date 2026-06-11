@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 import { execFile, spawn } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import {
@@ -338,8 +339,13 @@ async function runInstallWindowsTask(args) {
   }
 
   const scriptPath = resolve(import.meta.dirname, "index.js");
-  const innerCommand = [
-    "node",
+  const launcherPath = join(
+    dirname(resolve(args.state)),
+    `${sanitizeTaskName(args.taskName)}.ps1`,
+  );
+  const launcherCommand = [
+    "&",
+    quoteForPowerShell("node"),
     quoteForPowerShell(scriptPath),
     "watch",
     "--project",
@@ -360,9 +366,16 @@ async function runInstallWindowsTask(args) {
     "Hidden",
     "-ExecutionPolicy",
     "Bypass",
-    "-Command",
-    quoteForTaskCommand(innerCommand),
+    "-File",
+    quoteForCmd(launcherPath),
   ].join(" ");
+
+  mkdirSync(dirname(launcherPath), { recursive: true });
+  writeFileSync(
+    launcherPath,
+    `\uFEFF${["$ErrorActionPreference = 'Stop'", launcherCommand, ""].join("\r\n")}`,
+    "utf8",
+  );
 
   await execFileAsync("schtasks.exe", [
     "/Create",
@@ -376,6 +389,7 @@ async function runInstallWindowsTask(args) {
   ]);
 
   console.log(`Installed Windows scheduled task: ${args.taskName}`);
+  console.log(`Launcher: ${launcherPath}`);
   console.log("It will start at user logon. To start now, run:");
   console.log(`schtasks /Run /TN ${args.taskName}`);
 }
@@ -523,12 +537,20 @@ function quoteForCommand(value) {
   return `"${String(value).replaceAll('"', '\\"')}"`;
 }
 
+function quoteForCmd(value) {
+  return `"${String(value).replaceAll('"', '""')}"`;
+}
+
 function quoteForPowerShell(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 
-function quoteForTaskCommand(value) {
-  return `"${String(value).replaceAll('"', '\\"')}"`;
+function sanitizeTaskName(value) {
+  return (
+    String(value)
+      .replace(/[^a-zA-Z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || WATCHER_TASK_NAME
+  );
 }
 
 function normalizePositiveNumber(value, fallback) {

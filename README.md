@@ -116,11 +116,24 @@ Install a user logon scheduled task:
 node src/index.js install-windows-task --project "G:\文档\New project 2" --interval 300
 ```
 
+The installer writes a short PowerShell launcher under:
+
+```text
+C:\Users\ASUS\.codex\context-sentinel\CodexContextSentinel.ps1
+```
+
+The scheduled task calls that launcher instead of embedding the full Node
+command in `/TR`, because Windows `schtasks` rejects long `/TR` values.
+
 Start it immediately after installation:
 
 ```powershell
 schtasks /Run /TN CodexContextSentinel
 ```
+
+If `schtasks` reports `Access is denied`, run the install command from your own
+Windows PowerShell session, or from an elevated PowerShell if your local policy
+requires it.
 
 Delete the scheduled task later if needed:
 
