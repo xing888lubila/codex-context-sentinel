@@ -1,25 +1,30 @@
 # codex-context-sentinel
 
-`codex-context-sentinel` is a lightweight local CLI for estimating whether a
-Codex conversation has become too expensive to keep carrying forward.
+`codex-context-sentinel` is a lightweight local watcher for Codex session
+pressure. It scans local Codex session files and recommends whether a project
+can continue in the current thread or should move to a fresh conversation.
 
-It scans local Codex session files, groups sessions by project path, estimates
-context pressure from conversation size and tool activity, and prints a
-practical recommendation:
+Recommendations:
 
 - `continue-current-thread`
 - `consider-new-thread`
 - `start-new-thread`
 
-It cannot read hidden real-time Codex billing or token counters. It uses local
-session files and transparent heuristics, then generates a short handoff prompt
-when a new conversation is likely cleaner.
+This is not an exact token billing calculator. Codex does not expose hidden
+real-time accounting here, so this tool uses local session files and transparent
+heuristics based on file size, matched project sessions, tool activity, and
+project mentions.
 
 ## Why This Exists
 
 Long Codex threads can become less useful when every turn spends more effort
 recovering old context than doing current work. This tool gives a local,
 repeatable signal for when to start a fresh thread and what to paste into it.
+
+For the current Codex desktop interface on this Windows machine, the background
+watcher is the recommended mode. The older hook mode is retained as an optional
+capability, but it is less suitable when `/hooks` shows no commands in the
+desktop UI and there is no hook trust flow available.
 
 ## Install
 
@@ -38,7 +43,92 @@ npm link
 context-sentinel scan --project "G:\文档\New project 2"
 ```
 
-## Usage
+## Background Watcher
+
+Run a foreground watcher:
+
+```powershell
+node src/index.js watch --project "G:\文档\New project 2" --interval 300
+```
+
+Every interval, the watcher scans `C:\Users\ASUS\.codex\sessions`. When context
+pressure reaches `consider-new-thread` or `start-new-thread`, it shows a short
+Windows notification:
+
+```text
+Codex 上下文过长，建议开启新对话
+```
+
+The notification also includes the project path and recommendation level.
+
+The watcher writes handoff files here:
+
+```text
+C:\Users\ASUS\.codex\context-sentinel\handoffs\YYYYMMDD-HHMMSS-project.md
+```
+
+It also writes status here:
+
+```text
+C:\Users\ASUS\.codex\context-sentinel\watcher-state.json
+```
+
+To avoid repeated interruptions, the same project and same recommendation level
+notify at most once every 30 minutes by default.
+
+Check watcher state:
+
+```powershell
+node src/index.js status
+```
+
+Stop the PID recorded in the watcher state file:
+
+```powershell
+node src/index.js stop
+```
+
+Run a single scan/write cycle, useful for testing the watcher path:
+
+```powershell
+node src/index.js watch --project "G:\文档\New project 2" --once
+```
+
+## Windows Notification Strategy
+
+The watcher uses no npm notification dependency.
+
+On Windows, it first uses `New-BurntToastNotification` if the BurntToast
+PowerShell command is already installed. If BurntToast is not installed, it
+falls back to the Windows toast WinRT APIs from PowerShell. If toast display
+fails, the watcher still writes the status and handoff files.
+
+Adding an npm dependency such as `node-notifier` would make notification
+behavior more uniform but would add install size, native/platform behavior, and
+another dependency to maintain. The current default keeps the tool dependency
+free.
+
+## Windows Scheduled Task
+
+Install a user logon scheduled task:
+
+```powershell
+node src/index.js install-windows-task --project "G:\文档\New project 2" --interval 300
+```
+
+Start it immediately after installation:
+
+```powershell
+schtasks /Run /TN CodexContextSentinel
+```
+
+Delete the scheduled task later if needed:
+
+```powershell
+schtasks /Delete /TN CodexContextSentinel /F
+```
+
+## Manual Scan
 
 Scan the default Codex sessions directory:
 
@@ -58,6 +148,11 @@ Emit JSON:
 context-sentinel scan --project "G:\文档\New project 2" --json
 ```
 
+## Optional Hook Mode
+
+Hook mode is retained for Codex clients that support and display lifecycle
+hooks. It is optional for this project.
+
 Install a user-level Codex hook:
 
 ```powershell
@@ -65,15 +160,27 @@ node src/index.js install-hook --warn-score 55 --block-score 75
 ```
 
 After installation, restart Codex or open `/hooks` and review/trust the hook.
-Codex requires non-managed hooks to be trusted before they run.
+Codex requires non-managed hooks to be trusted before they run. If your desktop
+interface shows no commands under `/hooks`, use the watcher mode instead.
 
-When the hook blocks an overlong conversation, start a new Codex thread with
-the generated handoff prompt. If you intentionally want to keep going in the
-same thread, include this token in your next message:
+Existing hook files are not removed by this tool. To disable the old hook
+manually, edit:
 
 ```text
-sentinel-continue
+C:\Users\ASUS\.codex\hooks.json
 ```
+
+Remove the `codex-context-sentinel` entry under `UserPromptSubmit`, or move the
+file aside after making a backup. If hook support was enabled only for this
+experiment, also review:
+
+```text
+C:\Users\ASUS\.codex\config.toml
+```
+
+and remove or disable the previous `features.hooks` setting if you no longer
+want Codex to load hooks. Do not delete these files unless you are sure no other
+tooling depends on them.
 
 ## Output
 
@@ -87,42 +194,6 @@ The report includes:
 - project mention count
 - recommendation
 - suggested new-thread handoff prompt
-
-## Heuristic
-
-The current score is intentionally simple:
-
-- large estimated token volume increases pressure
-- many matched session files increase pressure
-- many tool calls increase pressure
-- repeated project mentions increase pressure
-
-This is not a billing calculator. It is a practical "should we start fresh?"
-signal.
-
-## Current Limits
-
-- Real-time prompting requires Codex clients that load lifecycle hooks from
-  `~/.codex/hooks.json` or `~/.codex/config.toml`.
-- It does not access private Codex token accounting.
-- It only sees local session files available on the current machine.
-- It does not modify or delete any Codex files.
-
-## Why Some Codex Interfaces May Not Load The Hook
-
-Codex hooks are a local client feature. A Codex interface may not load
-`~/.codex/hooks.json` when:
-
-- it is not backed by the local Codex CLI or IDE configuration layer;
-- hooks are disabled in `config.toml` or by managed policy;
-- the project or hook has not been reviewed and trusted;
-- the client is an older or limited surface that does not support lifecycle
-  hooks;
-- the session runs remotely where the local Windows `~/.codex` directory is not
-  available.
-
-In those cases, use `context-sentinel scan` manually or install the hook in the
-environment where that Codex session actually runs.
 
 ## Development
 

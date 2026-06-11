@@ -3,10 +3,15 @@ import assert from "node:assert/strict";
 
 import {
   analyzeSessions,
+  buildHandoffFilePath,
+  buildHandoffMarkdown,
   buildHookBlockReason,
   buildHandoffPrompt,
+  notificationStateKey,
+  recordNotification,
   recommendationFromScore,
   scoreContextPressure,
+  shouldNotify,
 } from "../src/sentinel.js";
 
 describe("context pressure scoring", () => {
@@ -83,5 +88,97 @@ describe("session analysis", () => {
     assert.match(reason, /上下文已经过长/);
     assert.match(reason, /Start a clean thread/);
     assert.match(reason, /sentinel-continue/);
+  });
+});
+
+describe("handoff files", () => {
+  it("builds a timestamped project handoff path", () => {
+    const filePath = buildHandoffFilePath({
+      handoffsDir: "C:/Users/ASUS/.codex/context-sentinel/handoffs",
+      projectPath: "G:/docs/House App",
+      now: new Date(2026, 5, 11, 10, 20, 30),
+    });
+
+    assert.equal(
+      filePath.replaceAll("\\", "/"),
+      "C:/Users/ASUS/.codex/context-sentinel/handoffs/20260611-102030-house-app.md",
+    );
+  });
+
+  it("writes a concise heuristic handoff markdown body", () => {
+    const markdown = buildHandoffMarkdown({
+      generatedAt: new Date("2026-06-11T10:20:30.000Z"),
+      analysis: {
+        projectPath: "G:/docs/demo",
+        recommendation: "start-new-thread",
+        score: 90,
+        estimatedTokens: 120000,
+        sessionCount: 4,
+        toolActivities: 300,
+        handoffPrompt: "Start a clean thread.",
+      },
+    });
+
+    assert.match(markdown, /Codex Context Sentinel Handoff/);
+    assert.match(markdown, /Start a clean thread/);
+    assert.match(markdown, /not exact token accounting/);
+  });
+});
+
+describe("notification cooldown", () => {
+  it("does not notify for continue-current-thread", () => {
+    assert.equal(
+      shouldNotify({
+        state: {},
+        projectPath: "G:/docs/demo",
+        recommendation: "continue-current-thread",
+      }),
+      false,
+    );
+  });
+
+  it("suppresses the same project and recommendation during cooldown", () => {
+    const now = new Date("2026-06-11T10:00:00.000Z");
+    const state = recordNotification({
+      state: {},
+      projectPath: "G:/docs/demo",
+      recommendation: "start-new-thread",
+      handoffPath: "handoff.md",
+      now,
+    });
+
+    assert.equal(
+      shouldNotify({
+        state,
+        projectPath: "G:/docs/demo",
+        recommendation: "start-new-thread",
+        nowMs: now.getTime() + 29 * 60 * 1000,
+        cooldownMs: 30 * 60 * 1000,
+      }),
+      false,
+    );
+    assert.equal(
+      shouldNotify({
+        state,
+        projectPath: "G:/docs/demo",
+        recommendation: "start-new-thread",
+        nowMs: now.getTime() + 31 * 60 * 1000,
+        cooldownMs: 30 * 60 * 1000,
+      }),
+      true,
+    );
+  });
+
+  it("uses a stable normalized notification key", () => {
+    assert.equal(
+      notificationStateKey({
+        projectPath: "G:\\docs\\demo",
+        recommendation: "consider-new-thread",
+      }),
+      notificationStateKey({
+        projectPath: "G:/docs/demo",
+        recommendation: "consider-new-thread",
+      }),
+    );
   });
 });

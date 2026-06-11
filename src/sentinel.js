@@ -7,7 +7,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 const DEFAULT_LIMIT = 200;
 
@@ -17,6 +17,18 @@ export function defaultCodexSessionsDir() {
   return codexHome && codexHome.length > 0
     ? join(codexHome, "sessions")
     : join(homedir(), ".codex", "sessions");
+}
+
+export function defaultSentinelDir() {
+  return join(homedir(), ".codex", "context-sentinel");
+}
+
+export function defaultHandoffsDir() {
+  return join(defaultSentinelDir(), "handoffs");
+}
+
+export function defaultWatcherStatePath() {
+  return join(defaultSentinelDir(), "watcher-state.json");
 }
 
 export function normalizeForSearch(value) {
@@ -187,6 +199,108 @@ export function buildHandoffPrompt({ projectPath, recommendation }) {
   ].join(" ");
 }
 
+export function buildHandoffMarkdown({ analysis, generatedAt = new Date() }) {
+  const handoffPrompt =
+    analysis.handoffPrompt ||
+    buildHandoffPrompt({
+      projectPath: analysis.projectPath,
+      recommendation: analysis.recommendation,
+    });
+
+  return [
+    "# Codex Context Sentinel Handoff",
+    "",
+    `Generated at: ${generatedAt.toISOString()}`,
+    `Project: ${analysis.projectPath}`,
+    `Recommendation: ${analysis.recommendation}`,
+    `Context pressure score: ${analysis.score}`,
+    `Estimated tokens: ${analysis.estimatedTokens}`,
+    `Matched session files: ${analysis.sessionCount}`,
+    `Tool activities: ${analysis.toolActivities}`,
+    "",
+    "## New Thread Prompt",
+    "",
+    handoffPrompt,
+    "",
+    "## Note",
+    "",
+    "This is a local heuristic based on Codex session files, not exact token accounting.",
+    "",
+  ].join("\n");
+}
+
+export function buildHandoffFilePath({
+  handoffsDir = defaultHandoffsDir(),
+  projectPath,
+  now = new Date(),
+}) {
+  const timestamp = formatTimestampForFile(now);
+  const slug = slugProjectName(projectPath);
+
+  return join(handoffsDir, `${timestamp}-${slug}.md`);
+}
+
+export function writeHandoffFile({ analysis, handoffsDir, now = new Date() }) {
+  const filePath = buildHandoffFilePath({
+    handoffsDir,
+    projectPath: analysis.projectPath,
+    now,
+  });
+
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, buildHandoffMarkdown({ analysis, generatedAt: now }));
+
+  return filePath;
+}
+
+export function shouldNotify({
+  state,
+  projectPath,
+  recommendation,
+  nowMs = Date.now(),
+  cooldownMs = 30 * 60 * 1000,
+}) {
+  if (recommendation === "continue-current-thread") {
+    return false;
+  }
+
+  const key = notificationStateKey({ projectPath, recommendation });
+  const lastNotifiedAtMs =
+    typeof state.notifications?.[key]?.lastNotifiedAtMs === "number"
+      ? state.notifications[key].lastNotifiedAtMs
+      : 0;
+
+  return nowMs - lastNotifiedAtMs >= cooldownMs;
+}
+
+export function recordNotification({
+  state,
+  projectPath,
+  recommendation,
+  handoffPath,
+  now = new Date(),
+}) {
+  const key = notificationStateKey({ projectPath, recommendation });
+
+  return {
+    ...state,
+    notifications: {
+      ...(state.notifications ?? {}),
+      [key]: {
+        projectPath: resolve(projectPath),
+        recommendation,
+        handoffPath,
+        lastNotifiedAt: now.toISOString(),
+        lastNotifiedAtMs: now.getTime(),
+      },
+    },
+  };
+}
+
+export function notificationStateKey({ projectPath, recommendation }) {
+  return `${normalizeForSearch(resolve(projectPath))}|${recommendation}`;
+}
+
 export function buildHookBlockReason({ analysis, continueToken }) {
   return [
     "Codex Context Sentinel: 当前对话上下文已经过长，建议开启新对话继续。",
@@ -251,6 +365,29 @@ export function formatMarkdownReport(analysis, sessionsDir) {
   }
 
   return `${lines.join("\n")}\n`;
+}
+
+function formatTimestampForFile(date) {
+  const pad = (value) => String(value).padStart(2, "0");
+
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+    "-",
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+  ].join("");
+}
+
+function slugProjectName(projectPath) {
+  return (
+    basename(resolve(projectPath))
+      .toLowerCase()
+      .replace(/[^a-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "project"
+  );
 }
 
 function countMatches(value, pattern) {

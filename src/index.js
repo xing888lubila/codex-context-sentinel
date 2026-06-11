@@ -1,31 +1,46 @@
 #!/usr/bin/env node
 
-import { existsSync } from "node:fs";
+import { execFile, spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { promisify } from "node:util";
 
 import {
   analyzeTranscriptFile,
   analyzeSessions,
   buildHookBlockReason,
   defaultCodexSessionsDir,
+  defaultHandoffsDir,
+  defaultWatcherStatePath,
   formatMarkdownReport,
   readMatchingSessions,
   readJsonFile,
+  recordNotification,
+  shouldNotify,
+  writeHandoffFile,
   writeJsonFile,
 } from "./sentinel.js";
+
+const execFileAsync = promisify(execFile);
+const WATCHER_TASK_NAME = "CodexContextSentinel";
 
 function parseArgs(argv) {
   const args = {
     command: argv[2] ?? "help",
     project: process.cwd(),
     sessions: defaultCodexSessionsDir(),
+    state: defaultWatcherStatePath(),
+    handoffs: defaultHandoffsDir(),
     limit: 200,
     json: false,
     warnScore: 55,
     blockScore: 75,
     continueToken: "sentinel-continue",
     cooldownTokens: 25000,
+    interval: 300,
+    cooldownMinutes: 30,
+    once: false,
+    taskName: WATCHER_TASK_NAME,
   };
 
   for (let index = 3; index < argv.length; index += 1) {
@@ -40,6 +55,18 @@ function parseArgs(argv) {
 
     if (current === "--sessions" && next !== undefined) {
       args.sessions = next;
+      index += 1;
+      continue;
+    }
+
+    if (current === "--state" && next !== undefined) {
+      args.state = next;
+      index += 1;
+      continue;
+    }
+
+    if (current === "--handoffs" && next !== undefined) {
+      args.handoffs = next;
       index += 1;
       continue;
     }
@@ -76,6 +103,29 @@ function parseArgs(argv) {
     if (current === "--cooldown-tokens" && next !== undefined) {
       args.cooldownTokens = Number.parseInt(next, 10);
       index += 1;
+      continue;
+    }
+
+    if (current === "--interval" && next !== undefined) {
+      args.interval = Number.parseInt(next, 10);
+      index += 1;
+      continue;
+    }
+
+    if (current === "--cooldown-minutes" && next !== undefined) {
+      args.cooldownMinutes = Number.parseInt(next, 10);
+      index += 1;
+      continue;
+    }
+
+    if (current === "--task-name" && next !== undefined) {
+      args.taskName = next;
+      index += 1;
+      continue;
+    }
+
+    if (current === "--once") {
+      args.once = true;
     }
   }
 
@@ -87,12 +137,17 @@ function printHelp() {
 
 Usage:
   context-sentinel scan --project <path> [--sessions <path>] [--limit <n>] [--json]
+  context-sentinel watch --project <path> [--interval <seconds>]
+  context-sentinel status [--state <path>]
+  context-sentinel stop [--state <path>]
+  context-sentinel install-windows-task --project <path> [--interval <seconds>]
   context-sentinel hook [--warn-score <n>] [--block-score <n>]
   context-sentinel install-hook [--warn-score <n>] [--block-score <n>]
 
 Examples:
   context-sentinel scan --project "G:\\文档\\New project 2"
-  context-sentinel scan --project "G:\\文档\\New project 2" --json
+  context-sentinel watch --project "G:\\文档\\New project 2" --interval 300
+  context-sentinel install-windows-task --project "G:\\文档\\New project 2"
   context-sentinel install-hook --block-score 75
 `);
 }
@@ -113,6 +168,216 @@ function runScan(args) {
   }
 
   process.stdout.write(formatMarkdownReport(analysis, args.sessions));
+}
+
+async function runWatch(args) {
+  const intervalSeconds = normalizePositiveNumber(args.interval, 300);
+  const cooldownMs =
+    normalizePositiveNumber(args.cooldownMinutes, 30) * 60 * 1000;
+  const statePath = resolve(args.state);
+  const projectPath = resolve(args.project);
+
+  await runWatchIteration({
+    ...args,
+    project: projectPath,
+    state: statePath,
+    cooldownMs,
+    startedAt: new Date(),
+  });
+
+  if (args.once) {
+    markWatcherStopped(statePath, projectPath);
+    return;
+  }
+
+  console.log(
+    `Context Sentinel watcher running for ${projectPath}. Interval: ${intervalSeconds}s.`,
+  );
+
+  const timer = setInterval(() => {
+    runWatchIteration({
+      ...args,
+      project: projectPath,
+      state: statePath,
+      cooldownMs,
+      startedAt: null,
+    }).catch((error) => {
+      const state = readJsonFile(statePath, {});
+      writeJsonFile(statePath, {
+        ...state,
+        pid: process.pid,
+        projectPath,
+        running: true,
+        lastError: error.message,
+        lastErrorAt: new Date().toISOString(),
+      });
+    });
+  }, intervalSeconds * 1000);
+
+  process.on("SIGINT", () => {
+    clearInterval(timer);
+    markWatcherStopped(statePath, projectPath);
+    process.exit(0);
+  });
+
+  process.on("SIGTERM", () => {
+    clearInterval(timer);
+    markWatcherStopped(statePath, projectPath);
+    process.exit(0);
+  });
+}
+
+async function runWatchIteration(args) {
+  const now = new Date();
+  const sessions = readMatchingSessions({
+    sessionsDir: args.sessions,
+    projectPath: args.project,
+    limit: Number.isFinite(args.limit) ? args.limit : 200,
+  });
+  const analysis = analyzeSessions(sessions, args.project);
+  const previousState = readJsonFile(args.state, {});
+  let nextState = {
+    ...previousState,
+    pid: process.pid,
+    running: true,
+    projectPath: analysis.projectPath,
+    sessionsDir: args.sessions,
+    handoffsDir: args.handoffs,
+    intervalSeconds: normalizePositiveNumber(args.interval, 300),
+    cooldownMinutes: normalizePositiveNumber(args.cooldownMinutes, 30),
+    startedAt:
+      args.startedAt instanceof Date
+        ? args.startedAt.toISOString()
+        : previousState.startedAt ?? now.toISOString(),
+    lastScanAt: now.toISOString(),
+    lastRecommendation: analysis.recommendation,
+    lastScore: analysis.score,
+    lastEstimatedTokens: analysis.estimatedTokens,
+    lastMatchedSessionFiles: analysis.sessionCount,
+    lastError: null,
+  };
+
+  if (
+    shouldNotify({
+      state: previousState,
+      projectPath: analysis.projectPath,
+      recommendation: analysis.recommendation,
+      nowMs: now.getTime(),
+      cooldownMs: args.cooldownMs,
+    })
+  ) {
+    const handoffPath = writeHandoffFile({
+      analysis,
+      handoffsDir: args.handoffs,
+      now,
+    });
+
+    await sendWindowsNotification({
+      title: "Codex Context Sentinel",
+      message: "Codex 上下文过长，建议开启新对话",
+      details: `${analysis.projectPath}\n建议级别：${analysis.recommendation}`,
+    });
+
+    nextState = recordNotification({
+      state: nextState,
+      projectPath: analysis.projectPath,
+      recommendation: analysis.recommendation,
+      handoffPath,
+      now,
+    });
+    nextState.lastHandoffPath = handoffPath;
+    nextState.lastNotificationAt = now.toISOString();
+  }
+
+  writeJsonFile(args.state, nextState);
+}
+
+function runStatus(args) {
+  const statePath = resolve(args.state);
+  const state = readJsonFile(statePath, null);
+
+  if (state === null) {
+    console.log(`No watcher state file found at ${statePath}`);
+    return;
+  }
+
+  const running = isPidRunning(state.pid);
+  console.log(`State file: ${statePath}`);
+  console.log(`Running: ${running ? "yes" : "no"}`);
+  console.log(`PID: ${state.pid ?? "unknown"}`);
+  console.log(`Project: ${state.projectPath ?? "unknown"}`);
+  console.log(`Last scan: ${state.lastScanAt ?? "never"}`);
+  console.log(`Last recommendation: ${state.lastRecommendation ?? "unknown"}`);
+  console.log(`Last score: ${state.lastScore ?? "unknown"}`);
+  console.log(`Last handoff: ${state.lastHandoffPath ?? "none"}`);
+}
+
+function runStop(args) {
+  const statePath = resolve(args.state);
+  const state = readJsonFile(statePath, null);
+
+  if (state === null || typeof state.pid !== "number") {
+    console.log(`No watcher PID found at ${statePath}`);
+    return;
+  }
+
+  if (!isPidRunning(state.pid)) {
+    markWatcherStopped(statePath, state.projectPath);
+    console.log(`Watcher PID ${state.pid} is not running.`);
+    return;
+  }
+
+  process.kill(state.pid);
+  markWatcherStopped(statePath, state.projectPath);
+  console.log(`Stopped watcher PID ${state.pid}.`);
+}
+
+async function runInstallWindowsTask(args) {
+  if (process.platform !== "win32") {
+    throw new Error("install-windows-task is only supported on Windows.");
+  }
+
+  const scriptPath = resolve(import.meta.dirname, "index.js");
+  const innerCommand = [
+    "node",
+    quoteForPowerShell(scriptPath),
+    "watch",
+    "--project",
+    quoteForPowerShell(resolve(args.project)),
+    "--sessions",
+    quoteForPowerShell(resolve(args.sessions)),
+    "--interval",
+    String(normalizePositiveNumber(args.interval, 300)),
+    "--state",
+    quoteForPowerShell(resolve(args.state)),
+    "--handoffs",
+    quoteForPowerShell(resolve(args.handoffs)),
+  ].join(" ");
+  const taskCommand = [
+    "powershell.exe",
+    "-NoProfile",
+    "-WindowStyle",
+    "Hidden",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-Command",
+    quoteForTaskCommand(innerCommand),
+  ].join(" ");
+
+  await execFileAsync("schtasks.exe", [
+    "/Create",
+    "/F",
+    "/SC",
+    "ONLOGON",
+    "/TN",
+    args.taskName,
+    "/TR",
+    taskCommand,
+  ]);
+
+  console.log(`Installed Windows scheduled task: ${args.taskName}`);
+  console.log("It will start at user logon. To start now, run:");
+  console.log(`schtasks /Run /TN ${args.taskName}`);
 }
 
 async function runHook(args) {
@@ -258,6 +523,92 @@ function quoteForCommand(value) {
   return `"${String(value).replaceAll('"', '\\"')}"`;
 }
 
+function quoteForPowerShell(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+function quoteForTaskCommand(value) {
+  return `"${String(value).replaceAll('"', '\\"')}"`;
+}
+
+function normalizePositiveNumber(value, fallback) {
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function isPidRunning(pid) {
+  if (typeof pid !== "number") {
+    return false;
+  }
+
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function markWatcherStopped(statePath, projectPath) {
+  const state = readJsonFile(statePath, {});
+  writeJsonFile(statePath, {
+    ...state,
+    running: false,
+    projectPath: projectPath ?? state.projectPath,
+    stoppedAt: new Date().toISOString(),
+  });
+}
+
+async function sendWindowsNotification({ title, message, details }) {
+  if (process.platform !== "win32") {
+    console.log(`${title}: ${message}\n${details}`);
+    return;
+  }
+
+  const script = `
+$title = ${toPowerShellString(title)}
+$message = ${toPowerShellString(message)}
+$details = ${toPowerShellString(details)}
+if (Get-Command New-BurntToastNotification -ErrorAction SilentlyContinue) {
+  New-BurntToastNotification -Text $title, $message, $details | Out-Null
+  exit 0
+}
+try {
+  [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
+  [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime] | Out-Null
+  $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+  $safeTitle = [System.Security.SecurityElement]::Escape($title)
+  $safeMessage = [System.Security.SecurityElement]::Escape($message)
+  $safeDetails = [System.Security.SecurityElement]::Escape($details)
+  $xml.LoadXml("<toast><visual><binding template='ToastGeneric'><text>$safeTitle</text><text>$safeMessage</text><text>$safeDetails</text></binding></visual></toast>")
+  $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
+  [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Codex Context Sentinel").Show($toast)
+  exit 0
+} catch {
+  Write-Output ($title + [Environment]::NewLine + $message + [Environment]::NewLine + $details)
+  exit 0
+}
+`;
+
+  await new Promise((resolvePromise) => {
+    const child = spawn(
+      "powershell.exe",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+      {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      },
+    );
+    child.on("error", () => resolvePromise());
+    child.unref();
+    resolvePromise();
+  });
+}
+
+function toPowerShellString(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
 async function readStdinJson() {
   const chunks = [];
 
@@ -283,6 +634,26 @@ async function main() {
 
   if (args.command === "scan") {
     runScan(args);
+    return;
+  }
+
+  if (args.command === "watch") {
+    await runWatch(args);
+    return;
+  }
+
+  if (args.command === "status") {
+    runStatus(args);
+    return;
+  }
+
+  if (args.command === "stop") {
+    runStop(args);
+    return;
+  }
+
+  if (args.command === "install-windows-task") {
+    await runInstallWindowsTask(args);
     return;
   }
 
