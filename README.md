@@ -94,14 +94,21 @@ Run a single scan/write cycle, useful for testing the watcher path:
 node src/index.js watch --project "G:\文档\New project 2" --once
 ```
 
+Send a test notification without waiting for the cooldown window:
+
+```powershell
+node src/index.js notify-test --project "G:\文档\New project 2"
+```
+
 ## Windows Notification Strategy
 
 The watcher uses no npm notification dependency.
 
 On Windows, it first uses `New-BurntToastNotification` if the BurntToast
 PowerShell command is already installed. If BurntToast is not installed, it
-falls back to the Windows toast WinRT APIs from PowerShell. If toast display
-fails, the watcher still writes the status and handoff files.
+falls back to the Windows toast WinRT APIs from PowerShell, then to a standard
+Windows Forms tray balloon. If visual notification display fails, the watcher
+still writes the status and handoff files.
 
 Adding an npm dependency such as `node-notifier` would make notification
 behavior more uniform but would add install size, native/platform behavior, and

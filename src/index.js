@@ -139,6 +139,7 @@ function printHelp() {
 Usage:
   context-sentinel scan --project <path> [--sessions <path>] [--limit <n>] [--json]
   context-sentinel watch --project <path> [--interval <seconds>]
+  context-sentinel notify-test [--project <path>]
   context-sentinel status [--state <path>]
   context-sentinel stop [--state <path>]
   context-sentinel install-windows-task --project <path> [--interval <seconds>] [--cooldown-minutes <minutes>]
@@ -148,6 +149,7 @@ Usage:
 Examples:
   context-sentinel scan --project "G:\\文档\\New project 2"
   context-sentinel watch --project "G:\\文档\\New project 2" --interval 300
+  context-sentinel notify-test --project "G:\\文档\\New project 2"
   context-sentinel install-windows-task --project "G:\\文档\\New project 2"
   context-sentinel install-hook --block-score 75
 `);
@@ -331,6 +333,15 @@ function runStop(args) {
   process.kill(state.pid);
   markWatcherStopped(statePath, state.projectPath);
   console.log(`Stopped watcher PID ${state.pid}.`);
+}
+
+async function runNotifyTest(args) {
+  await sendWindowsNotification({
+    title: "Codex Context Sentinel",
+    message: "Codex 上下文过长，建议开启新对话",
+    details: `测试通知：项目 ${resolve(args.project)}；建议级别：start-new-thread`,
+  });
+  console.log("Sent Context Sentinel test notification.");
 }
 
 async function runInstallWindowsTask(args) {
@@ -606,10 +617,21 @@ try {
   $xml.LoadXml("<toast><visual><binding template='ToastGeneric'><text>$safeTitle</text><text>$safeMessage</text><text>$safeDetails</text></binding></visual></toast>")
   $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
   [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Codex Context Sentinel").Show($toast)
-  exit 0
+} catch {
+}
+try {
+  Add-Type -AssemblyName System.Windows.Forms
+  Add-Type -AssemblyName System.Drawing
+  $notify = New-Object System.Windows.Forms.NotifyIcon
+  $notify.Icon = [System.Drawing.SystemIcons]::Information
+  $notify.Visible = $true
+  $notify.BalloonTipTitle = $title
+  $notify.BalloonTipText = ($message + [Environment]::NewLine + $details)
+  $notify.ShowBalloonTip(10000)
+  Start-Sleep -Seconds 12
+  $notify.Dispose()
 } catch {
   Write-Output ($title + [Environment]::NewLine + $message + [Environment]::NewLine + $details)
-  exit 0
 }
 `;
 
@@ -663,6 +685,11 @@ async function main() {
 
   if (args.command === "watch") {
     await runWatch(args);
+    return;
+  }
+
+  if (args.command === "notify-test") {
+    await runNotifyTest(args);
     return;
   }
 
