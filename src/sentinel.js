@@ -1,6 +1,13 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const DEFAULT_LIMIT = 200;
 
@@ -123,6 +130,27 @@ export function analyzeSessions(sessions, projectPath) {
   };
 }
 
+export function analyzeTranscriptFile({ transcriptPath, cwd }) {
+  if (
+    transcriptPath === null ||
+    transcriptPath === undefined ||
+    transcriptPath.length === 0 ||
+    !existsSync(transcriptPath)
+  ) {
+    return analyzeSessions([], cwd);
+  }
+
+  return analyzeSessions(
+    [
+      {
+        file: transcriptPath,
+        content: readFileSync(transcriptPath, "utf8"),
+      },
+    ],
+    cwd,
+  );
+}
+
 export function scoreContextPressure(metrics) {
   let score = 0;
 
@@ -157,6 +185,42 @@ export function buildHandoffPrompt({ projectPath, recommendation }) {
     "Do not delete user files. Keep code changes on a branch and use PR workflow where applicable.",
     "If the previous thread was long, use existing docs and current repository state as the source of truth instead of relying on stale conversation memory.",
   ].join(" ");
+}
+
+export function buildHookBlockReason({ analysis, continueToken }) {
+  return [
+    "Codex Context Sentinel: 当前对话上下文已经过长，建议开启新对话继续。",
+    "",
+    `上下文压力评分：${analysis.score}`,
+    `估算 tokens：${analysis.estimatedTokens}`,
+    `工具活动次数：${analysis.toolActivities}`,
+    "",
+    "新对话可复制提示：",
+    analysis.handoffPrompt ||
+      buildHandoffPrompt({
+        projectPath: analysis.projectPath,
+        recommendation: "start-new-thread",
+      }),
+    "",
+    `如果你仍要在当前对话继续，请在下一条消息中包含 ${continueToken}。`,
+  ].join("\n");
+}
+
+export function readJsonFile(filePath, fallback) {
+  try {
+    if (!existsSync(filePath)) {
+      return fallback;
+    }
+
+    return JSON.parse(readFileSync(filePath, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+export function writeJsonFile(filePath, value) {
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 export function formatMarkdownReport(analysis, sessionsDir) {

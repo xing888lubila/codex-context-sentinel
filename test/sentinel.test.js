@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   analyzeSessions,
+  buildHookBlockReason,
   buildHandoffPrompt,
   recommendationFromScore,
   scoreContextPressure,
@@ -66,5 +67,21 @@ describe("session analysis", () => {
       }),
       "",
     );
+  });
+
+  it("builds a hook block reason with the continue token", () => {
+    const reason = buildHookBlockReason({
+      analysis: {
+        score: 90,
+        estimatedTokens: 120000,
+        toolActivities: 300,
+        handoffPrompt: "Start a clean thread.",
+      },
+      continueToken: "sentinel-continue",
+    });
+
+    assert.match(reason, /上下文已经过长/);
+    assert.match(reason, /Start a clean thread/);
+    assert.match(reason, /sentinel-continue/);
   });
 });

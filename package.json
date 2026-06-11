@@ -9,6 +9,7 @@
   "scripts": {
     "test": "node --test",
     "check": "node --test",
+    "install-hook": "node src/index.js install-hook",
     "scan": "node src/index.js scan"
   },
   "keywords": [
