@@ -117,11 +117,13 @@ node src/index.js notify-test --project "G:\文档\New project 2"
 
 The watcher uses no npm notification dependency.
 
-On Windows, it first shows a small closeable Windows Forms popup that stays
-open for up to 60 seconds. If that display path fails, it falls back to
-`New-BurntToastNotification` when BurntToast is already installed, then to the
-Windows toast WinRT APIs from PowerShell. If visual notification display fails,
-the watcher still writes the status and handoff files.
+On Windows, it writes and launches a small PowerShell Windows Forms popup under
+`C:\Users\ASUS\.codex\context-sentinel\show-notification.ps1`. The popup stays
+open for up to 60 seconds and can be closed manually. If that display path
+fails, it falls back to `New-BurntToastNotification` when BurntToast is already
+installed, then to the Windows toast WinRT APIs from PowerShell. If visual
+notification display fails, the watcher still writes the status and handoff
+files.
 
 Adding an npm dependency such as `node-notifier` would make notification
 behavior more uniform but would add install size, native/platform behavior, and

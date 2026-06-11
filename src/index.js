@@ -626,6 +626,38 @@ async function sendWindowsNotification({ title, message, details }) {
     return;
   }
 
+  const notificationScriptPath = join(
+    homedir(),
+    ".codex",
+    "context-sentinel",
+    "show-notification.ps1",
+  );
+  mkdirSync(dirname(notificationScriptPath), { recursive: true });
+  writeFileSync(
+    notificationScriptPath,
+    buildNotificationPowerShell({ title, message, details }),
+    "utf8",
+  );
+
+  try {
+    const child = spawn("powershell.exe", [
+      "-Sta",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      notificationScriptPath,
+    ], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: false,
+    });
+    child.unref();
+    return;
+  } catch {
+    // Fall through to inline PowerShell-based notification attempts.
+  }
+
   const script = `
 $title = ${toPowerShellString(title)}
 $message = ${toPowerShellString(message)}
@@ -709,11 +741,11 @@ try {
   await new Promise((resolvePromise) => {
     const child = spawn(
       "powershell.exe",
-      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+      ["-Sta", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
       {
         detached: true,
         stdio: "ignore",
-        windowsHide: true,
+        windowsHide: false,
       },
     );
     child.on("error", () => resolvePromise());
@@ -724,6 +756,67 @@ try {
 
 function toPowerShellString(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+function buildNotificationPowerShell({ title, message, details }) {
+  return `\uFEFF$ErrorActionPreference = 'Stop'
+$title = ${toPowerShellString(title)}
+$message = ${toPowerShellString(message)}
+$details = ${toPowerShellString(details)}
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$form = New-Object System.Windows.Forms.Form
+$form.Text = $title
+$form.Width = 460
+$form.Height = 220
+$form.TopMost = $true
+$form.ShowInTaskbar = $true
+$form.StartPosition = 'Manual'
+$form.FormBorderStyle = 'FixedSingle'
+$form.MaximizeBox = $false
+$area = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+$form.Left = $area.Right - $form.Width - 24
+$form.Top = $area.Bottom - $form.Height - 24
+
+$titleLabel = New-Object System.Windows.Forms.Label
+$titleLabel.Text = $message
+$titleLabel.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 11, [System.Drawing.FontStyle]::Bold)
+$titleLabel.AutoSize = $false
+$titleLabel.Left = 18
+$titleLabel.Top = 18
+$titleLabel.Width = 410
+$titleLabel.Height = 38
+
+$detailsLabel = New-Object System.Windows.Forms.Label
+$detailsLabel.Text = $details
+$detailsLabel.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+$detailsLabel.AutoSize = $false
+$detailsLabel.Left = 18
+$detailsLabel.Top = 64
+$detailsLabel.Width = 410
+$detailsLabel.Height = 78
+
+$button = New-Object System.Windows.Forms.Button
+$button.Text = '关闭'
+$button.Width = 86
+$button.Height = 30
+$button.Left = $form.Width - 120
+$button.Top = $form.Height - 78
+$button.Add_Click({ $form.Close() })
+
+$timer = New-Object System.Windows.Forms.Timer
+$timer.Interval = 60000
+$timer.Add_Tick({
+  $timer.Stop()
+  $form.Close()
+})
+
+$form.Controls.Add($titleLabel)
+$form.Controls.Add($detailsLabel)
+$form.Controls.Add($button)
+$form.Add_Shown({ $timer.Start(); $form.Activate() })
+[System.Windows.Forms.Application]::Run($form)
+`;
 }
 
 async function readStdinJson() {
