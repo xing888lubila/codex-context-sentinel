@@ -8,11 +8,15 @@ import {
   buildHookBlockReason,
   buildHandoffPrompt,
   notificationStateKey,
+  readLatestMatchingSession,
   recordNotification,
   recommendationFromScore,
   scoreContextPressure,
   shouldNotify,
 } from "../src/sentinel.js";
+import { mkdtempSync, utimesSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 describe("context pressure scoring", () => {
   it("recommends continuing for small sessions", () => {
@@ -88,6 +92,31 @@ describe("session analysis", () => {
     assert.match(reason, /上下文已经过长/);
     assert.match(reason, /Start a clean thread/);
     assert.match(reason, /sentinel-continue/);
+  });
+});
+
+describe("latest session matching", () => {
+  it("returns only the most recently modified matching project session", () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), "sentinel-sessions-"));
+    const oldFile = join(sessionsDir, "old.jsonl");
+    const newFile = join(sessionsDir, "new.jsonl");
+
+    writeFileSync(oldFile, "work in G:/docs/demo");
+    writeFileSync(newFile, "continue work in G:/docs/demo");
+
+    const oldTime = new Date("2026-06-11T10:00:00.000Z");
+    const newTime = new Date("2026-06-11T11:00:00.000Z");
+    utimesSync(oldFile, oldTime, oldTime);
+    utimesSync(newFile, newTime, newTime);
+
+    const sessions = readLatestMatchingSession({
+      sessionsDir,
+      projectPath: "G:/docs/demo",
+      limit: 20,
+    });
+
+    assert.equal(sessions.length, 1);
+    assert.equal(sessions[0].file, newFile);
   });
 });
 

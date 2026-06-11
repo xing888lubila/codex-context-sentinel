@@ -51,15 +51,28 @@ Run a foreground watcher:
 node src/index.js watch --project "G:\文档\New project 2" --interval 300
 ```
 
-Every interval, the watcher scans `C:\Users\ASUS\.codex\sessions`. When context
-pressure reaches `consider-new-thread` or `start-new-thread`, it shows a short
-Windows notification:
+Every interval, the watcher scans `C:\Users\ASUS\.codex\sessions`. By default,
+watcher mode analyzes only the most recently modified session file that matches
+the project path or project name. This is meant to track the active conversation
+for that project instead of being polluted by old, abandoned long conversations.
+
+Use aggregate project mode only when you intentionally want a whole-project
+overview:
+
+```powershell
+node src/index.js watch --project "G:\文档\New project 2" --scope project
+```
+
+When context pressure reaches `consider-new-thread` or `start-new-thread`, it
+shows a Windows notification:
 
 ```text
 Codex 上下文过长，建议开启新对话
 ```
 
 The notification also includes the project path and recommendation level.
+The default visual alert is a small topmost window that stays open for up to
+60 seconds and can be closed manually.
 
 The watcher writes handoff files here:
 
@@ -104,11 +117,11 @@ node src/index.js notify-test --project "G:\文档\New project 2"
 
 The watcher uses no npm notification dependency.
 
-On Windows, it first uses `New-BurntToastNotification` if the BurntToast
-PowerShell command is already installed. If BurntToast is not installed, it
-falls back to the Windows toast WinRT APIs from PowerShell, then to a standard
-Windows Forms tray balloon. If visual notification display fails, the watcher
-still writes the status and handoff files.
+On Windows, it first shows a small closeable Windows Forms popup that stays
+open for up to 60 seconds. If that display path fails, it falls back to
+`New-BurntToastNotification` when BurntToast is already installed, then to the
+Windows toast WinRT APIs from PowerShell. If visual notification display fails,
+the watcher still writes the status and handoff files.
 
 Adding an npm dependency such as `node-notifier` would make notification
 behavior more uniform but would add install size, native/platform behavior, and

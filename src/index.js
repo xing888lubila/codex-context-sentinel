@@ -14,6 +14,7 @@ import {
   defaultHandoffsDir,
   defaultWatcherStatePath,
   formatMarkdownReport,
+  readLatestMatchingSession,
   readMatchingSessions,
   readJsonFile,
   recordNotification,
@@ -40,6 +41,7 @@ function parseArgs(argv) {
     cooldownTokens: 25000,
     interval: 300,
     cooldownMinutes: 30,
+    scope: "latest",
     once: false,
     taskName: WATCHER_TASK_NAME,
   };
@@ -119,6 +121,12 @@ function parseArgs(argv) {
       continue;
     }
 
+    if (current === "--scope" && next !== undefined) {
+      args.scope = next;
+      index += 1;
+      continue;
+    }
+
     if (current === "--task-name" && next !== undefined) {
       args.taskName = next;
       index += 1;
@@ -138,11 +146,11 @@ function printHelp() {
 
 Usage:
   context-sentinel scan --project <path> [--sessions <path>] [--limit <n>] [--json]
-  context-sentinel watch --project <path> [--interval <seconds>]
+  context-sentinel watch --project <path> [--interval <seconds>] [--scope latest|project]
   context-sentinel notify-test [--project <path>]
   context-sentinel status [--state <path>]
   context-sentinel stop [--state <path>]
-  context-sentinel install-windows-task --project <path> [--interval <seconds>] [--cooldown-minutes <minutes>]
+  context-sentinel install-windows-task --project <path> [--interval <seconds>] [--cooldown-minutes <minutes>] [--scope latest|project]
   context-sentinel hook [--warn-score <n>] [--block-score <n>]
   context-sentinel install-hook [--warn-score <n>] [--block-score <n>]
 
@@ -156,10 +164,11 @@ Examples:
 }
 
 function runScan(args) {
-  const sessions = readMatchingSessions({
+  const sessions = readSessionsForScope({
     sessionsDir: args.sessions,
     projectPath: args.project,
     limit: Number.isFinite(args.limit) ? args.limit : 200,
+    scope: "project",
   });
   const analysis = analyzeSessions(sessions, args.project);
 
@@ -232,10 +241,11 @@ async function runWatch(args) {
 
 async function runWatchIteration(args) {
   const now = new Date();
-  const sessions = readMatchingSessions({
+  const sessions = readSessionsForScope({
     sessionsDir: args.sessions,
     projectPath: args.project,
     limit: Number.isFinite(args.limit) ? args.limit : 200,
+    scope: args.scope,
   });
   const analysis = analyzeSessions(sessions, args.project);
   const previousState = readJsonFile(args.state, {});
@@ -248,6 +258,7 @@ async function runWatchIteration(args) {
     handoffsDir: args.handoffs,
     intervalSeconds: normalizePositiveNumber(args.interval, 300),
     cooldownMinutes: normalizePositiveNumber(args.cooldownMinutes, 30),
+    scope: normalizeScope(args.scope),
     startedAt:
       args.startedAt instanceof Date
         ? args.startedAt.toISOString()
@@ -257,6 +268,7 @@ async function runWatchIteration(args) {
     lastScore: analysis.score,
     lastEstimatedTokens: analysis.estimatedTokens,
     lastMatchedSessionFiles: analysis.sessionCount,
+    lastSessionFile: analysis.sessionFiles[0] ?? null,
     lastError: null,
   };
 
@@ -312,6 +324,7 @@ function runStatus(args) {
   console.log(`Last scan: ${state.lastScanAt ?? "never"}`);
   console.log(`Last recommendation: ${state.lastRecommendation ?? "unknown"}`);
   console.log(`Last score: ${state.lastScore ?? "unknown"}`);
+  console.log(`Last session file: ${state.lastSessionFile ?? "unknown"}`);
   console.log(`Last handoff: ${state.lastHandoffPath ?? "none"}`);
 }
 
@@ -367,6 +380,8 @@ async function runInstallWindowsTask(args) {
     String(normalizePositiveNumber(args.interval, 300)),
     "--cooldown-minutes",
     String(normalizePositiveNumber(args.cooldownMinutes, 30)),
+    "--scope",
+    normalizeScope(args.scope),
     "--state",
     quoteForPowerShell(resolve(args.state)),
     "--handoffs",
@@ -570,6 +585,18 @@ function normalizePositiveNumber(value, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function normalizeScope(value) {
+  return value === "project" ? "project" : "latest";
+}
+
+function readSessionsForScope({ sessionsDir, projectPath, limit, scope }) {
+  const normalizedScope = normalizeScope(scope);
+  const reader =
+    normalizedScope === "latest" ? readLatestMatchingSession : readMatchingSessions;
+
+  return reader({ sessionsDir, projectPath, limit });
+}
+
 function isPidRunning(pid) {
   if (typeof pid !== "number") {
     return false;
@@ -603,6 +630,63 @@ async function sendWindowsNotification({ title, message, details }) {
 $title = ${toPowerShellString(title)}
 $message = ${toPowerShellString(message)}
 $details = ${toPowerShellString(details)}
+try {
+  Add-Type -AssemblyName System.Windows.Forms
+  Add-Type -AssemblyName System.Drawing
+  $form = New-Object System.Windows.Forms.Form
+  $form.Text = $title
+  $form.Width = 460
+  $form.Height = 210
+  $form.TopMost = $true
+  $form.ShowInTaskbar = $true
+  $form.StartPosition = 'Manual'
+  $form.FormBorderStyle = 'FixedSingle'
+  $form.MaximizeBox = $false
+  $area = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+  $form.Left = $area.Right - $form.Width - 24
+  $form.Top = $area.Bottom - $form.Height - 24
+
+  $titleLabel = New-Object System.Windows.Forms.Label
+  $titleLabel.Text = $message
+  $titleLabel.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 11, [System.Drawing.FontStyle]::Bold)
+  $titleLabel.AutoSize = $false
+  $titleLabel.Left = 18
+  $titleLabel.Top = 18
+  $titleLabel.Width = 410
+  $titleLabel.Height = 34
+
+  $detailsLabel = New-Object System.Windows.Forms.Label
+  $detailsLabel.Text = $details
+  $detailsLabel.Font = New-Object System.Drawing.Font('Microsoft YaHei UI', 9)
+  $detailsLabel.AutoSize = $false
+  $detailsLabel.Left = 18
+  $detailsLabel.Top = 60
+  $detailsLabel.Width = 410
+  $detailsLabel.Height = 70
+
+  $button = New-Object System.Windows.Forms.Button
+  $button.Text = '关闭'
+  $button.Width = 86
+  $button.Height = 30
+  $button.Left = $form.Width - 120
+  $button.Top = $form.Height - 78
+  $button.Add_Click({ $form.Close() })
+
+  $timer = New-Object System.Windows.Forms.Timer
+  $timer.Interval = 60000
+  $timer.Add_Tick({
+    $timer.Stop()
+    $form.Close()
+  })
+
+  $form.Controls.Add($titleLabel)
+  $form.Controls.Add($detailsLabel)
+  $form.Controls.Add($button)
+  $form.Add_Shown({ $timer.Start(); $form.Activate() })
+  [System.Windows.Forms.Application]::Run($form)
+  exit 0
+} catch {
+}
 if (Get-Command New-BurntToastNotification -ErrorAction SilentlyContinue) {
   New-BurntToastNotification -Text $title, $message, $details | Out-Null
   exit 0
@@ -617,19 +701,6 @@ try {
   $xml.LoadXml("<toast><visual><binding template='ToastGeneric'><text>$safeTitle</text><text>$safeMessage</text><text>$safeDetails</text></binding></visual></toast>")
   $toast = [Windows.UI.Notifications.ToastNotification]::new($xml)
   [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Codex Context Sentinel").Show($toast)
-} catch {
-}
-try {
-  Add-Type -AssemblyName System.Windows.Forms
-  Add-Type -AssemblyName System.Drawing
-  $notify = New-Object System.Windows.Forms.NotifyIcon
-  $notify.Icon = [System.Drawing.SystemIcons]::Information
-  $notify.Visible = $true
-  $notify.BalloonTipTitle = $title
-  $notify.BalloonTipText = ($message + [Environment]::NewLine + $details)
-  $notify.ShowBalloonTip(10000)
-  Start-Sleep -Seconds 12
-  $notify.Dispose()
 } catch {
   Write-Output ($title + [Environment]::NewLine + $message + [Environment]::NewLine + $details)
 }

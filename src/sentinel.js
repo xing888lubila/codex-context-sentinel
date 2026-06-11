@@ -96,6 +96,10 @@ export function readMatchingSessions({ sessionsDir, projectPath, limit }) {
     .filter(Boolean);
 }
 
+export function readLatestMatchingSession({ sessionsDir, projectPath, limit }) {
+  return readMatchingSessions({ sessionsDir, projectPath, limit }).slice(0, 1);
+}
+
 export function analyzeSessions(sessions, projectPath) {
   const joinedContent = sessions.map((session) => session.content).join("\n");
   const normalizedContent = normalizeForSearch(joinedContent);
@@ -126,6 +130,7 @@ export function analyzeSessions(sessions, projectPath) {
 
   return {
     projectPath: resolve(projectPath),
+    sessionFiles: sessions.map((session) => session.file),
     sessionCount: sessions.length,
     estimatedCharacters: joinedContent.length,
     estimatedTokens,
