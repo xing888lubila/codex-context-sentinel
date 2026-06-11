@@ -356,7 +356,7 @@ async function runInstallWindowsTask(args) {
   );
   const launcherCommand = [
     "&",
-    quoteForPowerShell("node"),
+    quoteForPowerShell(process.execPath),
     quoteForPowerShell(scriptPath),
     "watch",
     "--project",
