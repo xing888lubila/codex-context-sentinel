@@ -302,6 +302,7 @@ async function runWatchIteration(args) {
       state: previousState,
       projectPath: analysis.projectPath,
       recommendation: analysis.recommendation,
+      alertLevel: analysis.alertLevel,
       nowMs: now.getTime(),
       cooldownMs: args.cooldownMs,
     })
@@ -315,13 +316,14 @@ async function runWatchIteration(args) {
     await sendWindowsNotification({
       title: "Codex Context Sentinel",
       message: "Codex 上下文过长，建议开启新对话",
-      details: `${analysis.projectPath}\n建议级别：${analysis.recommendation}`,
+      details: `${analysis.projectPath}\n提醒级别：${analysis.alertLevel}\n建议：${analysis.recommendation}`,
     });
 
     nextState = recordNotification({
       state: nextState,
       projectPath: analysis.projectPath,
       recommendation: analysis.recommendation,
+      alertLevel: analysis.alertLevel,
       handoffPath,
       now,
     });

@@ -315,6 +315,7 @@ export function shouldNotify({
   state,
   projectPath,
   recommendation,
+  alertLevel,
   nowMs = Date.now(),
   cooldownMs = 30 * 60 * 1000,
 }) {
@@ -322,7 +323,11 @@ export function shouldNotify({
     return false;
   }
 
-  const key = notificationStateKey({ projectPath, recommendation });
+  const key = notificationStateKey({
+    projectPath,
+    recommendation,
+    alertLevel,
+  });
   const lastNotifiedAtMs =
     typeof state.notifications?.[key]?.lastNotifiedAtMs === "number"
       ? state.notifications[key].lastNotifiedAtMs
@@ -335,10 +340,11 @@ export function recordNotification({
   state,
   projectPath,
   recommendation,
+  alertLevel,
   handoffPath,
   now = new Date(),
 }) {
-  const key = notificationStateKey({ projectPath, recommendation });
+  const key = notificationStateKey({ projectPath, recommendation, alertLevel });
 
   return {
     ...state,
@@ -347,6 +353,7 @@ export function recordNotification({
       [key]: {
         projectPath: resolve(projectPath),
         recommendation,
+        alertLevel,
         handoffPath,
         lastNotifiedAt: now.toISOString(),
         lastNotifiedAtMs: now.getTime(),
@@ -355,8 +362,10 @@ export function recordNotification({
   };
 }
 
-export function notificationStateKey({ projectPath, recommendation }) {
-  return `${normalizeForSearch(resolve(projectPath))}|${recommendation}`;
+export function notificationStateKey({ projectPath, recommendation, alertLevel }) {
+  return `${normalizeForSearch(resolve(projectPath))}|${
+    alertLevel ?? recommendation
+  }`;
 }
 
 export function buildHookBlockReason({ analysis, continueToken }) {

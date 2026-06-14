@@ -183,6 +183,7 @@ describe("notification cooldown", () => {
       state: {},
       projectPath: "G:/docs/demo",
       recommendation: "start-new-thread",
+      alertLevel: "start-new-thread",
       handoffPath: "handoff.md",
       now,
     });
@@ -192,6 +193,7 @@ describe("notification cooldown", () => {
         state,
         projectPath: "G:/docs/demo",
         recommendation: "start-new-thread",
+        alertLevel: "start-new-thread",
         nowMs: now.getTime() + 29 * 60 * 1000,
         cooldownMs: 30 * 60 * 1000,
       }),
@@ -202,6 +204,7 @@ describe("notification cooldown", () => {
         state,
         projectPath: "G:/docs/demo",
         recommendation: "start-new-thread",
+        alertLevel: "start-new-thread",
         nowMs: now.getTime() + 31 * 60 * 1000,
         cooldownMs: 30 * 60 * 1000,
       }),
@@ -214,11 +217,36 @@ describe("notification cooldown", () => {
       notificationStateKey({
         projectPath: "G:\\docs\\demo",
         recommendation: "consider-new-thread",
+        alertLevel: "reminder",
       }),
       notificationStateKey({
         projectPath: "G:/docs/demo",
         recommendation: "consider-new-thread",
+        alertLevel: "reminder",
       }),
+    );
+  });
+
+  it("uses separate cooldown keys for reminder and strong reminder", () => {
+    const state = recordNotification({
+      state: {},
+      projectPath: "G:/docs/demo",
+      recommendation: "consider-new-thread",
+      alertLevel: "reminder",
+      handoffPath: "handoff.md",
+      now: new Date("2026-06-11T10:00:00.000Z"),
+    });
+
+    assert.equal(
+      shouldNotify({
+        state,
+        projectPath: "G:/docs/demo",
+        recommendation: "consider-new-thread",
+        alertLevel: "strong-reminder",
+        nowMs: new Date("2026-06-11T10:01:00.000Z").getTime(),
+        cooldownMs: 30 * 60 * 1000,
+      }),
+      true,
     );
   });
 });
