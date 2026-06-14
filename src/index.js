@@ -690,21 +690,26 @@ async function sendWindowsNotification({ title, message, details }) {
   );
 
   try {
-    const child = spawn("powershell.exe", [
-      "-Sta",
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      notificationScriptPath,
-    ], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: false,
-    });
-    child.unref();
+    await execFileAsync(
+      "powershell.exe",
+      [
+        "-Sta",
+        "-NoProfile",
+        "-WindowStyle",
+        "Normal",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        notificationScriptPath,
+      ],
+      {
+        timeout: 65000,
+        windowsHide: false,
+      },
+    );
     return;
-  } catch {
+  } catch (error) {
+    console.error(`Context Sentinel popup failed: ${error.message}`);
     // Fall through to inline PowerShell-based notification attempts.
   }
 
