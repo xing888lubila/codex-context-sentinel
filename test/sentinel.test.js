@@ -8,6 +8,7 @@ import {
   buildHookBlockReason,
   buildHandoffPrompt,
   notificationStateKey,
+  alertLevelFromScore,
   readLatestMatchingSession,
   recordNotification,
   recommendationFromScore,
@@ -39,6 +40,16 @@ describe("context pressure scoring", () => {
     });
 
     assert.equal(recommendationFromScore(score), "start-new-thread");
+  });
+
+  it("uses 60/65/70 alert thresholds by default", () => {
+    assert.equal(recommendationFromScore(59), "continue-current-thread");
+    assert.equal(alertLevelFromScore(60), "reminder");
+    assert.equal(recommendationFromScore(60), "consider-new-thread");
+    assert.equal(alertLevelFromScore(65), "strong-reminder");
+    assert.equal(recommendationFromScore(65), "consider-new-thread");
+    assert.equal(alertLevelFromScore(70), "start-new-thread");
+    assert.equal(recommendationFromScore(70), "start-new-thread");
   });
 });
 

@@ -18,6 +18,7 @@ import {
   readMatchingSessions,
   readJsonFile,
   recordNotification,
+  normalizeThresholds,
   shouldNotify,
   writeHandoffFile,
   writeJsonFile,
@@ -35,8 +36,11 @@ function parseArgs(argv) {
     handoffs: defaultHandoffsDir(),
     limit: 200,
     json: false,
-    warnScore: 55,
-    blockScore: 75,
+    warnScore: 60,
+    blockScore: 70,
+    noticeScore: 60,
+    strongScore: 65,
+    newThreadScore: 70,
     continueToken: "sentinel-continue",
     cooldownTokens: 25000,
     interval: 300,
@@ -93,6 +97,24 @@ function parseArgs(argv) {
 
     if (current === "--block-score" && next !== undefined) {
       args.blockScore = Number.parseInt(next, 10);
+      index += 1;
+      continue;
+    }
+
+    if (current === "--notice-score" && next !== undefined) {
+      args.noticeScore = Number.parseInt(next, 10);
+      index += 1;
+      continue;
+    }
+
+    if (current === "--strong-score" && next !== undefined) {
+      args.strongScore = Number.parseInt(next, 10);
+      index += 1;
+      continue;
+    }
+
+    if (current === "--new-thread-score" && next !== undefined) {
+      args.newThreadScore = Number.parseInt(next, 10);
       index += 1;
       continue;
     }
@@ -170,7 +192,7 @@ function runScan(args) {
     limit: Number.isFinite(args.limit) ? args.limit : 200,
     scope: "project",
   });
-  const analysis = analyzeSessions(sessions, args.project);
+  const analysis = analyzeSessions(sessions, args.project, thresholdsFromArgs(args));
 
   if (args.json) {
     console.log(
@@ -247,8 +269,9 @@ async function runWatchIteration(args) {
     limit: Number.isFinite(args.limit) ? args.limit : 200,
     scope: args.scope,
   });
-  const analysis = analyzeSessions(sessions, args.project);
+  const analysis = analyzeSessions(sessions, args.project, thresholdsFromArgs(args));
   const previousState = readJsonFile(args.state, {});
+  const thresholds = thresholdsFromArgs(args);
   let nextState = {
     ...previousState,
     pid: process.pid,
@@ -259,12 +282,14 @@ async function runWatchIteration(args) {
     intervalSeconds: normalizePositiveNumber(args.interval, 300),
     cooldownMinutes: normalizePositiveNumber(args.cooldownMinutes, 30),
     scope: normalizeScope(args.scope),
+    thresholds,
     startedAt:
       args.startedAt instanceof Date
         ? args.startedAt.toISOString()
         : previousState.startedAt ?? now.toISOString(),
     lastScanAt: now.toISOString(),
     lastRecommendation: analysis.recommendation,
+    lastAlertLevel: analysis.alertLevel,
     lastScore: analysis.score,
     lastEstimatedTokens: analysis.estimatedTokens,
     lastMatchedSessionFiles: analysis.sessionCount,
@@ -323,6 +348,7 @@ function runStatus(args) {
   console.log(`Project: ${state.projectPath ?? "unknown"}`);
   console.log(`Last scan: ${state.lastScanAt ?? "never"}`);
   console.log(`Last recommendation: ${state.lastRecommendation ?? "unknown"}`);
+  console.log(`Last alert level: ${state.lastAlertLevel ?? "unknown"}`);
   console.log(`Last score: ${state.lastScore ?? "unknown"}`);
   console.log(`Last session file: ${state.lastSessionFile ?? "unknown"}`);
   console.log(`Last handoff: ${state.lastHandoffPath ?? "none"}`);
@@ -382,6 +408,12 @@ async function runInstallWindowsTask(args) {
     String(normalizePositiveNumber(args.cooldownMinutes, 30)),
     "--scope",
     normalizeScope(args.scope),
+    "--notice-score",
+    String(thresholdsFromArgs(args).noticeScore),
+    "--strong-score",
+    String(thresholdsFromArgs(args).strongScore),
+    "--new-thread-score",
+    String(thresholdsFromArgs(args).newThreadScore),
     "--state",
     quoteForPowerShell(resolve(args.state)),
     "--handoffs",
@@ -433,7 +465,11 @@ async function runHook(args) {
   const statePath = join(homedir(), ".codex", "context-sentinel", "state.json");
   const state = readJsonFile(statePath, { sessions: {} });
   const previousState = state.sessions?.[sessionId] ?? {};
-  const analysis = analyzeTranscriptFile({ transcriptPath, cwd });
+  const analysis = analyzeTranscriptFile({
+    transcriptPath,
+    cwd,
+    thresholds: thresholdsFromArgs(args),
+  });
   const continueRequested = prompt.includes(args.continueToken);
   const thresholdScore = Number.isFinite(args.blockScore) ? args.blockScore : 75;
   const warnScore = Number.isFinite(args.warnScore) ? args.warnScore : 55;
@@ -587,6 +623,18 @@ function normalizePositiveNumber(value, fallback) {
 
 function normalizeScope(value) {
   return value === "project" ? "project" : "latest";
+}
+
+function thresholdsFromArgs(args) {
+  return normalizeThresholds({
+    noticeScore: Number.isFinite(args.noticeScore)
+      ? args.noticeScore
+      : args.warnScore,
+    strongScore: args.strongScore,
+    newThreadScore: Number.isFinite(args.newThreadScore)
+      ? args.newThreadScore
+      : args.blockScore,
+  });
 }
 
 function readSessionsForScope({ sessionsDir, projectPath, limit, scope }) {

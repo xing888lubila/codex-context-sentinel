@@ -10,6 +10,11 @@ import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
 const DEFAULT_LIMIT = 200;
+const DEFAULT_THRESHOLDS = {
+  noticeScore: 60,
+  strongScore: 65,
+  newThreadScore: 70,
+};
 
 export function defaultCodexSessionsDir() {
   const codexHome = process.env.CODEX_HOME;
@@ -100,7 +105,8 @@ export function readLatestMatchingSession({ sessionsDir, projectPath, limit }) {
   return readMatchingSessions({ sessionsDir, projectPath, limit }).slice(0, 1);
 }
 
-export function analyzeSessions(sessions, projectPath) {
+export function analyzeSessions(sessions, projectPath, thresholds = {}) {
+  const normalizedThresholds = normalizeThresholds(thresholds);
   const joinedContent = sessions.map((session) => session.content).join("\n");
   const normalizedContent = normalizeForSearch(joinedContent);
   const normalizedProjectPath = normalizeForSearch(resolve(projectPath));
@@ -126,7 +132,8 @@ export function analyzeSessions(sessions, projectPath) {
     toolActivities,
     projectMentions,
   });
-  const recommendation = recommendationFromScore(score);
+  const recommendation = recommendationFromScore(score, normalizedThresholds);
+  const alertLevel = alertLevelFromScore(score, normalizedThresholds);
 
   return {
     projectPath: resolve(projectPath),
@@ -139,6 +146,7 @@ export function analyzeSessions(sessions, projectPath) {
     toolActivities,
     projectMentions,
     score,
+    alertLevel,
     recommendation,
     handoffPrompt: buildHandoffPrompt({
       projectPath: resolve(projectPath),
@@ -147,14 +155,14 @@ export function analyzeSessions(sessions, projectPath) {
   };
 }
 
-export function analyzeTranscriptFile({ transcriptPath, cwd }) {
+export function analyzeTranscriptFile({ transcriptPath, cwd, thresholds = {} }) {
   if (
     transcriptPath === null ||
     transcriptPath === undefined ||
     transcriptPath.length === 0 ||
     !existsSync(transcriptPath)
   ) {
-    return analyzeSessions([], cwd);
+    return analyzeSessions([], cwd, thresholds);
   }
 
   return analyzeSessions(
@@ -165,6 +173,7 @@ export function analyzeTranscriptFile({ transcriptPath, cwd }) {
       },
     ],
     cwd,
+    thresholds,
   );
 }
 
@@ -179,16 +188,60 @@ export function scoreContextPressure(metrics) {
   return score;
 }
 
-export function recommendationFromScore(score) {
-  if (score >= 65) {
+export function recommendationFromScore(score, thresholds = {}) {
+  const normalizedThresholds = normalizeThresholds(thresholds);
+
+  if (score >= normalizedThresholds.newThreadScore) {
     return "start-new-thread";
   }
 
-  if (score >= 35) {
+  if (score >= normalizedThresholds.noticeScore) {
     return "consider-new-thread";
   }
 
   return "continue-current-thread";
+}
+
+export function alertLevelFromScore(score, thresholds = {}) {
+  const normalizedThresholds = normalizeThresholds(thresholds);
+
+  if (score >= normalizedThresholds.newThreadScore) {
+    return "start-new-thread";
+  }
+
+  if (score >= normalizedThresholds.strongScore) {
+    return "strong-reminder";
+  }
+
+  if (score >= normalizedThresholds.noticeScore) {
+    return "reminder";
+  }
+
+  return "none";
+}
+
+export function normalizeThresholds(thresholds = {}) {
+  const noticeScore = normalizeScore(
+    thresholds.noticeScore,
+    DEFAULT_THRESHOLDS.noticeScore,
+  );
+  const strongScore = Math.max(
+    noticeScore,
+    normalizeScore(thresholds.strongScore, DEFAULT_THRESHOLDS.strongScore),
+  );
+  const newThreadScore = Math.max(
+    strongScore,
+    normalizeScore(
+      thresholds.newThreadScore,
+      DEFAULT_THRESHOLDS.newThreadScore,
+    ),
+  );
+
+  return {
+    noticeScore,
+    strongScore,
+    newThreadScore,
+  };
 }
 
 export function buildHandoffPrompt({ projectPath, recommendation }) {
@@ -413,4 +466,8 @@ function countSubstring(value, substring) {
   }
 
   return count;
+}
+
+function normalizeScore(value, fallback) {
+  return Number.isFinite(value) ? value : fallback;
 }

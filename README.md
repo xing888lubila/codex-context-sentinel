@@ -89,6 +89,18 @@ C:\Users\ASUS\.codex\context-sentinel\watcher-state.json
 To avoid repeated interruptions, the same project and same recommendation level
 notify at most once every 30 minutes by default.
 
+Default watcher thresholds:
+
+- score `60`: reminder
+- score `65`: strong reminder
+- score `70`: recommend starting a new thread
+
+You can override them when starting or installing the watcher:
+
+```powershell
+node src/index.js watch --project "G:\文档\New project 2" --notice-score 60 --strong-score 65 --new-thread-score 70
+```
+
 Check watcher state:
 
 ```powershell
