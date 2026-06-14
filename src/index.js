@@ -1,9 +1,9 @@
-#!/usr/bin/env node
+﻿#!/usr/bin/env node
 
 import { execFile, spawn } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 
 import {
@@ -272,6 +272,8 @@ async function runWatchIteration(args) {
   const analysis = analyzeSessions(sessions, args.project, thresholdsFromArgs(args));
   const previousState = readJsonFile(args.state, {});
   const thresholds = thresholdsFromArgs(args);
+  const sessionFile = analysis.sessionFiles[0] ?? null;
+  const sessionDescriptor = describeSessionFile(sessionFile);
   let nextState = {
     ...previousState,
     pid: process.pid,
@@ -293,7 +295,9 @@ async function runWatchIteration(args) {
     lastScore: analysis.score,
     lastEstimatedTokens: analysis.estimatedTokens,
     lastMatchedSessionFiles: analysis.sessionCount,
-    lastSessionFile: analysis.sessionFiles[0] ?? null,
+    lastSessionFile: sessionFile,
+    lastSessionLabel: sessionDescriptor.label,
+    lastSessionModifiedAt: sessionDescriptor.modifiedAt,
     lastError: null,
   };
 
@@ -316,7 +320,10 @@ async function runWatchIteration(args) {
     await sendWindowsNotification({
       title: "Codex Context Sentinel",
       message: "Codex 上下文过长，建议开启新对话",
-      details: `${analysis.projectPath}\n提醒级别：${analysis.alertLevel}\n建议：${analysis.recommendation}`,
+      details: buildNotificationDetails({
+        analysis,
+        sessionDescriptor,
+      }),
     });
 
     nextState = recordNotification({
@@ -353,6 +360,10 @@ function runStatus(args) {
   console.log(`Last alert level: ${state.lastAlertLevel ?? "unknown"}`);
   console.log(`Last score: ${state.lastScore ?? "unknown"}`);
   console.log(`Last session file: ${state.lastSessionFile ?? "unknown"}`);
+  console.log(`Last session label: ${state.lastSessionLabel ?? "unknown"}`);
+  console.log(
+    `Last session modified: ${state.lastSessionModifiedAt ?? "unknown"}`,
+  );
   console.log(`Last handoff: ${state.lastHandoffPath ?? "none"}`);
 }
 
@@ -376,11 +387,64 @@ function runStop(args) {
   console.log(`Stopped watcher PID ${state.pid}.`);
 }
 
+function buildNotificationDetails({ analysis, sessionDescriptor }) {
+  return [
+    `项目：${analysis.projectPath}`,
+    `提醒级别：${analysis.alertLevel}`,
+    `建议：${analysis.recommendation}`,
+    `对话：${sessionDescriptor.label}`,
+    `最近写入：${sessionDescriptor.modifiedAt ?? "unknown"}`,
+    `文件：${sessionDescriptor.file ?? "unknown"}`,
+  ].join("\n");
+}
+
+function describeSessionFile(file) {
+  if (typeof file !== "string" || file.length === 0) {
+    return {
+      file: null,
+      label: "unknown",
+      modifiedAt: null,
+    };
+  }
+
+  const name = basename(file);
+  const idMatch = name.match(
+    /rollout-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-(.+)\.jsonl$/,
+  );
+  const label = idMatch ? `rollout ${idMatch[1]}` : name;
+
+  try {
+    return {
+      file,
+      label,
+      modifiedAt: statSync(file).mtime.toLocaleString(),
+    };
+  } catch {
+    return {
+      file,
+      label,
+      modifiedAt: null,
+    };
+  }
+}
+
 async function runNotifyTest(args) {
+  const sessions = readSessionsForScope({
+    sessionsDir: args.sessions,
+    projectPath: args.project,
+    limit: Number.isFinite(args.limit) ? args.limit : 200,
+    scope: args.scope,
+  });
+  const analysis = analyzeSessions(sessions, args.project, thresholdsFromArgs(args));
+  const sessionDescriptor = describeSessionFile(analysis.sessionFiles[0] ?? null);
+
   await sendWindowsNotification({
     title: "Codex Context Sentinel",
     message: "Codex 上下文过长，建议开启新对话",
-    details: `测试通知：项目 ${resolve(args.project)}；建议级别：start-new-thread`,
+    details: buildNotificationDetails({
+      analysis,
+      sessionDescriptor,
+    }),
   });
   console.log("Sent Context Sentinel test notification.");
 }
@@ -955,3 +1019,4 @@ main().catch((error) => {
   console.error(error);
   process.exitCode = 1;
 });
+

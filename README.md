@@ -72,7 +72,11 @@ Codex 上下文过长，建议开启新对话
 
 The notification also includes the project path and recommendation level.
 The default visual alert is a small topmost window that stays open for up to
-60 seconds and can be closed manually.
+60 seconds and can be closed manually. It also shows the matched local session
+file, a rollout/session label derived from the filename, and the file's last
+modified time. This identifies the local Codex conversation file that triggered
+the alert; it is not necessarily the same as the human-readable title shown in
+the Codex sidebar.
 
 The watcher writes handoff files here:
 
